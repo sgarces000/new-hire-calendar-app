@@ -10,7 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <!-- Chosen Palette: Tailwind CSS Default (Slate Gray, Sky Blue for accents) -->
     <!-- Application Structure Plan: The application uses a classic calendar interface, which is the most intuitive structure for visualizing monthly date-based information like new hire start dates. It consists of a header with month/year navigation controls and a main grid representing the days. This structure was chosen to directly mirror the user's mental model of a calendar, ensuring immediate usability without a learning curve. Users can navigate between months and directly type names into the four available slots for each day. -->
-    <!-- Visualization & Content Choices: Report Info: New Hire start dates. Goal: Organize and inform. Viz/Presentation: Interactive HTML/CSS Calendar Grid. Interaction: Month/year selection updates the grid; users can type directly into `contenteditable` divs for each day. Justification: This is the most direct and effective way to represent and interact with daily scheduling information. It avoids the complexity of forms for a simple task. Library/Method: Vanilla JS and Tailwind CSS. -->
+    <!-- Visualization & Content Choices: Report Info: New Hire start dates. Goal: Organize and inform. Viz/Presentation: Interactive HTML/CSS Calendar Grid. Interaction: Month/year selection updates the grid; users can click on hire slots to open a modal for name and notes input. Justification: This is the most direct and effective way to represent and interact with daily scheduling information, now enhanced with detailed notes via a modal for better organization and real-time multi-user sharing via Firebase Firestore. Library/Method: Vanilla JS, Tailwind CSS, Firebase (Auth, Firestore). -->
     <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
     <style>
         body {
@@ -64,17 +64,35 @@
             padding: 4px;
             margin-top: 4px;
             min-height: 24px;
-            cursor: text;
+            cursor: pointer; /* Indicate clickable */
+            overflow: hidden; /* Hide overflow text */
+            white-space: nowrap; /* Prevent text wrapping */
+            text-overflow: ellipsis; /* Add ellipsis for overflow */
+            display: flex;
+            align-items: center; /* Vertically center text */
         }
-        .hire-slot:focus {
-            outline: 2px solid #38bdf8; /* sky-400 */
-            background-color: white;
+        .hire-slot:hover {
+            background-color: #e2e8f0; /* slate-200 */
+        }
+        .hire-slot.has-content {
+            background-color: #dbeafe; /* blue-100 */
+            color: #1e40af; /* blue-800 */
+            font-weight: 500;
+        }
+        .hire-slot.has-content:hover {
+            background-color: #bfdbfe; /* blue-200 */
         }
         .day-header {
             font-size: 0.875rem; /* 14px */
             line-height: 1.25rem;
             font-weight: 600;
             color: #475569; /* slate-600 */
+        }
+        .user-id-display {
+            font-size: 0.75rem;
+            color: #64748b; /* slate-500 */
+            margin-top: 8px;
+            word-break: break-all; /* Ensure long IDs wrap */
         }
     </style>
 </head>
@@ -84,6 +102,7 @@
         <header class="mb-6">
             <h1 class="text-3xl font-bold text-slate-800">New Hire Onboarding Calendar</h1>
             <p class="text-slate-500 mt-1">Select a month and year to view or add new hire start dates.</p>
+            <p id="user-id-display" class="user-id-display">Loading user...</p>
         </header>
 
         <div class="flex flex-col sm:flex-row items-center justify-between mb-4 p-4 bg-white rounded-lg shadow-sm">
@@ -117,23 +136,37 @@
         </div>
     </div>
 
-    <!-- LLM Modal for Onboarding Tasks -->
-    <div id="llm-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center p-4 z-50">
+    <!-- Notes Modal -->
+    <div id="notes-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden flex items-center justify-center p-4 z-50">
         <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
             <div class="flex justify-between items-center mb-4">
-                <h3 class="text-lg font-semibold text-slate-800">Onboarding Tasks for <span id="modal-date"></span></h3>
-                <button id="close-modal" class="text-slate-500 hover:text-slate-700">
+                <h3 class="text-lg font-semibold text-slate-800">Details for <span id="notes-modal-date"></span></h3>
+                <button id="close-notes-modal" class="text-slate-500 hover:text-slate-700">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
                 </button>
             </div>
-            <div id="modal-content" class="text-slate-700 text-sm overflow-y-auto max-h-80">
-                <p class="text-center text-slate-500" id="loading-indicator">Loading tasks...</p>
+            <div class="mb-4">
+                <label for="hire-name-input" class="block text-sm font-medium text-slate-700 mb-1">New Hire Name:</label>
+                <input type="text" id="hire-name-input" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-sky-500 focus:ring-sky-500 sm:text-sm p-2">
+            </div>
+            <div class="mb-4">
+                <label for="notes-textarea" class="block text-sm font-medium text-slate-700 mb-1">Notes:</label>
+                <textarea id="notes-textarea" rows="5" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-sky-500 focus:ring-sky-500 sm:text-sm p-2"></textarea>
+            </div>
+            <div class="flex justify-end space-x-2">
+                <button id="delete-entry-btn" class="px-4 py-2 bg-red-500 text-white font-semibold rounded-md shadow-sm hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors">Delete</button>
+                <button id="save-notes-btn" class="px-4 py-2 bg-sky-500 text-white font-semibold rounded-md shadow-sm hover:bg-sky-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500 transition-colors">Save</button>
             </div>
         </div>
     </div>
 
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
+    <script type="module">
+        // Firebase CDN imports
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, deleteDoc, collection, query, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        document.addEventListener('DOMContentLoaded', async function() {
             const calendarGrid = document.getElementById('calendar-grid');
             const currentMonthYearEl = document.getElementById('current-month-year');
             const monthSelect = document.getElementById('month-select');
@@ -141,19 +174,63 @@
             const prevMonthBtn = document.getElementById('prev-month');
             const nextMonthBtn = document.getElementById('next-month');
             const todayBtn = document.getElementById('today-btn');
+            const userIdDisplay = document.getElementById('user-id-display');
 
-            const llmModal = document.getElementById('llm-modal');
-            const modalDateEl = document.getElementById('modal-date');
-            const modalContentEl = document.getElementById('modal-content');
-            const loadingIndicator = document.getElementById('loading-indicator');
-            const closeModalBtn = document.getElementById('close-modal');
+            const notesModal = document.getElementById('notes-modal');
+            const notesModalDateEl = document.getElementById('notes-modal-date');
+            const hireNameInput = document.getElementById('hire-name-input');
+            const notesTextarea = document.getElementById('notes-textarea');
+            const saveNotesBtn = document.getElementById('save-notes-btn');
+            const deleteEntryBtn = document.getElementById('delete-entry-btn');
+            const closeNotesModalBtn = document.getElementById('close-notes-modal');
 
             let currentDate = new Date();
+            let notesData = {}; // Data will now come from Firestore
+            let currentSelectedSlot = null; // To keep track of which slot is being edited
+
+            let db;
+            let auth;
+            let userId;
+            let appId;
+            let notesCollectionRef; // Reference to the Firestore collection
 
             const months = [
                 "January", "February", "March", "April", "May", "June",
                 "July", "August", "September", "October", "November", "December"
             ];
+
+            // Initialize Firebase
+            try {
+                appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                // Authenticate user
+                if (typeof __initial_auth_token !== 'undefined') {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        userIdDisplay.textContent = `Your User ID: ${userId}`;
+                        // Define the collection path for public shared data
+                        notesCollectionRef = collection(db, `artifacts/${appId}/public/data/newHireCalendar`);
+                        setupFirestoreListener(); // Start listening for data once authenticated
+                    } else {
+                        userId = crypto.randomUUID(); // Fallback for unauthenticated
+                        userIdDisplay.textContent = `Anonymous User ID: ${userId}`;
+                    }
+                });
+
+            } catch (error) {
+                console.error("Error initializing Firebase:", error);
+                userIdDisplay.textContent = `Error: Firebase initialization failed.`;
+            }
 
             function populateSelectors() {
                 months.forEach((month, index) => {
@@ -172,44 +249,111 @@
                 }
             }
 
-            async function generateOnboardingTasks(date) {
-                llmModal.classList.remove('hidden');
-                modalDateEl.textContent = date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-                modalContentEl.innerHTML = '';
-                loadingIndicator.classList.remove('hidden');
-                modalContentEl.appendChild(loadingIndicator);
+            // Setup Firestore real-time listener
+            function setupFirestoreListener() {
+                if (!notesCollectionRef) return;
 
-                const prompt = `Generate 5 generic onboarding tasks for a new hire starting on ${date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. Format as a bulleted list.`;
-                
-                let chatHistory = [];
-                chatHistory.push({ role: "user", parts: [{ text: prompt }] });
-                const payload = { contents: chatHistory };
-                const apiKey = ""; 
-                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+                const q = query(notesCollectionRef); // Query all documents in the collection
+                onSnapshot(q, (snapshot) => {
+                    notesData = {}; // Clear existing data
+                    snapshot.forEach((doc) => {
+                        const data = doc.data();
+                        const { dateKey, slotIndex, name, notes } = data;
+                        if (dateKey && typeof slotIndex === 'number') {
+                            if (!notesData[dateKey]) {
+                                notesData[dateKey] = {};
+                            }
+                            notesData[dateKey][slotIndex] = { name, notes };
+                        }
+                    });
+                    renderCalendar(); // Re-render calendar with new data
+                }, (error) => {
+                    console.error("Error listening to Firestore:", error);
+                    // Handle error, maybe show a message to the user
+                });
+            }
+
+            async function saveNotesToFirestore() {
+                if (!currentSelectedSlot || !db || !userId) return;
+
+                const { dateKey, slotIndex } = currentSelectedSlot;
+                const name = hireNameInput.value.trim();
+                const notes = notesTextarea.value.trim();
+                const docId = `${dateKey}_${slotIndex}`; // Unique ID for the document
 
                 try {
-                    const response = await fetch(apiUrl, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-                    const result = await response.json();
-                    loadingIndicator.classList.add('hidden');
-
-                    if (result.candidates && result.candidates.length > 0 &&
-                        result.candidates[0].content && result.candidates[0].content.parts &&
-                        result.candidates[0].content.parts.length > 0) {
-                        const text = result.candidates[0].content.parts[0].text;
-                        const formattedText = text.replace(/\*/g, '').split('\n').filter(line => line.trim() !== '').map(line => `<li>${line.trim()}</li>`).join('');
-                        modalContentEl.innerHTML = `<ul class="list-disc pl-5">${formattedText}</ul>`;
+                    if (name || notes) {
+                        await setDoc(doc(notesCollectionRef, docId), {
+                            dateKey: dateKey,
+                            slotIndex: slotIndex,
+                            name: name,
+                            notes: notes,
+                            updatedBy: userId,
+                            timestamp: new Date()
+                        });
                     } else {
-                        modalContentEl.innerHTML = '<p class="text-red-500">Failed to generate tasks. Please try again.</p>';
+                        // If both are empty, delete the document
+                        await deleteDoc(doc(notesCollectionRef, docId));
                     }
-                } catch (error) {
-                    loadingIndicator.classList.add('hidden');
-                    modalContentEl.innerHTML = `<p class="text-red-500">Error: ${error.message}. Could not connect to API.</p>`;
+                } catch (e) {
+                    console.error("Error writing document: ", e);
+                    // Show a user-friendly error message
                 }
             }
+
+            async function deleteEntryFromFirestore() {
+                if (!currentSelectedSlot || !db) return;
+
+                const { dateKey, slotIndex } = currentSelectedSlot;
+                const docId = `${dateKey}_${slotIndex}`;
+
+                try {
+                    await deleteDoc(doc(notesCollectionRef, docId));
+                } catch (e) {
+                    console.error("Error deleting document: ", e);
+                    // Show a user-friendly error message
+                }
+            }
+
+            function openNotesModal(date, slotIndex, dateKey) {
+                currentSelectedSlot = { date: date, slotIndex: slotIndex, dateKey: dateKey };
+                notesModal.classList.remove('hidden');
+                notesModalDateEl.textContent = date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+
+                const slotData = notesData[dateKey] ? notesData[dateKey][slotIndex] : null;
+                hireNameInput.value = slotData ? slotData.name : '';
+                notesTextarea.value = slotData ? slotData.notes : '';
+
+                // Show delete button only if there's content
+                if (slotData && (slotData.name || slotData.notes)) {
+                    deleteEntryBtn.classList.remove('hidden');
+                } else {
+                    deleteEntryBtn.classList.add('hidden');
+                }
+            }
+
+            function closeNotesModal() {
+                notesModal.classList.add('hidden');
+                currentSelectedSlot = null;
+            }
+
+            saveNotesBtn.addEventListener('click', async () => {
+                await saveNotesToFirestore();
+                closeNotesModal();
+            });
+
+            deleteEntryBtn.addEventListener('click', async () => {
+                await deleteEntryFromFirestore();
+                closeNotesModal();
+            });
+
+            closeNotesModalBtn.addEventListener('click', closeNotesModal);
+
+            notesModal.addEventListener('click', (event) => {
+                if (event.target === notesModal) {
+                    closeNotesModal();
+                }
+            });
 
             function renderCalendar() {
                 const year = currentDate.getFullYear();
@@ -231,6 +375,7 @@
                 for (let i = 0; i < 42; i++) {
                     const day = new Date(startDate);
                     day.setDate(day.getDate() + i);
+                    const dateKey = day.toISOString().split('T')[0]; // YYYY-MM-DD for storage key
 
                     const dayCell = document.createElement('div');
                     dayCell.className = 'calendar-day p-2';
@@ -247,33 +392,42 @@
                     }
 
                     const dateHeader = document.createElement('div');
-                    dateHeader.className = 'flex justify-between items-center mb-1';
+                    dateHeader.className = 'flex justify-end items-center mb-1'; // Align date to right
                     
                     const dateNumber = document.createElement('div');
-                    dateNumber.className = 'date-number self-start sm:self-end';
+                    dateNumber.className = 'date-number';
                     dateNumber.textContent = day.getDate();
                     
                     if (isToday) {
                         dateNumber.classList.add('today');
                     }
                     dateHeader.appendChild(dateNumber);
-
-                    const generateTasksBtn = document.createElement('button');
-                    generateTasksBtn.className = 'generate-tasks-btn text-xs text-sky-600 hover:text-sky-800 transition-colors px-2 py-1 rounded-md';
-                    generateTasksBtn.textContent = '✨ Tasks';
-                    generateTasksBtn.dataset.date = day.toISOString(); // Store full date for API call
-                    generateTasksBtn.addEventListener('click', (event) => {
-                        event.stopPropagation(); // Prevent potential parent clicks
-                        generateOnboardingTasks(new Date(event.target.dataset.date));
-                    });
-                    dateHeader.appendChild(generateTasksBtn);
                     
                     dayCell.appendChild(dateHeader);
 
                     for (let j = 0; j < 4; j++) {
                         const hireSlot = document.createElement('div');
                         hireSlot.className = 'hire-slot';
-                        hireSlot.setAttribute('contenteditable', 'true');
+                        hireSlot.dataset.date = day.toISOString();
+                        hireSlot.dataset.slotIndex = j;
+                        hireSlot.dataset.dateKey = dateKey;
+
+                        const slotData = notesData[dateKey] ? notesData[dateKey][j] : null;
+                        if (slotData && slotData.name) {
+                            hireSlot.textContent = slotData.name;
+                            hireSlot.classList.add('has-content');
+                        } else {
+                            hireSlot.textContent = 'Add Hire...'; // Placeholder text
+                            hireSlot.classList.remove('has-content');
+                        }
+
+                        hireSlot.addEventListener('click', (event) => {
+                            const clickedDate = new Date(event.target.dataset.date);
+                            const clickedSlotIndex = parseInt(event.target.dataset.slotIndex);
+                            const clickedDateKey = event.target.dataset.dateKey;
+                            openNotesModal(clickedDate, clickedSlotIndex, clickedDateKey);
+                        });
+                        
                         dayCell.appendChild(hireSlot);
                     }
                     
@@ -306,19 +460,8 @@
                 renderCalendar();
             });
 
-            closeModalBtn.addEventListener('click', () => {
-                llmModal.classList.add('hidden');
-            });
-
-            // Close modal when clicking outside
-            llmModal.addEventListener('click', (event) => {
-                if (event.target === llmModal) {
-                    llmModal.classList.add('hidden');
-                }
-            });
-
             populateSelectors();
-            renderCalendar();
+            // Initial render will happen after Firebase auth state is determined
         });
     </script>
 
